@@ -42,7 +42,7 @@ import mujoco
 import mujoco.viewer
 
 import robot
-
+from src.cinta_transportadora import CintaTransportadora
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN GENERAL
@@ -54,7 +54,7 @@ CAM_W = 360
 CAM_H = 260
 CAM_FPS = 20.0
 
-BELT_SPEED = 0.55          # m/s, velocidad objetivo de los objetos
+
 
 # -----------------------------------------------------------------------------
 # BANDERAS DE MARCHA / PARO DE CADA CINTA
@@ -63,11 +63,7 @@ BELT_SPEED = 0.55          # m/s, velocidad objetivo de los objetos
 # False -> cinta detenida
 # Estas variables pueden modificarse directamente antes de ejecutar el programa
 # y también con las teclas 1..5 durante la simulación.
-BANDERA_CINTA_1 = True      # cinta inferior (+X)
-BANDERA_CINTA_2 = True      # cinta derecha (+Y)
-BANDERA_CINTA_3 = True      # cinta superior (-X)
-BANDERA_CINTA_4 = True      # cinta izquierda (-Y)
-BANDERA_CINTA_5 = True      # cinta hacia el horno (-X)
+    
 
 VEL_KP = 7.0               # control de velocidad
 CENTER_KP = 12.0           # mantiene el objeto centrado en la cinta
@@ -140,7 +136,7 @@ OBJECT_REST_Z = [
 # La boca se deja completamente libre: el robot deposita la pieza sobre la
 # Cinta 5 y la banda se encarga del resto. Ya no se hace un desvío dinámico
 # desde la Cinta 4, que era la causa principal del atasco observado.
-BRANCH_SPEED = 0.48
+BRANCH_SPEED = 0.48 
 BRANCH_Y = 0.0
 BRANCH_HALF_LENGTH = 1.15
 BRANCH_HALF_WIDTH = 0.32
@@ -658,56 +654,19 @@ def update_segment(pos, seg, obj_index):
     return seg
 
 
-def cinta_activa(seg):
-    """Devuelve la bandera de marcha de la cinta asociada al segmento 0..4."""
-    if seg == 0:
-        return BANDERA_CINTA_1
-    if seg == 1:
-        return BANDERA_CINTA_2
-    if seg == 2:
-        return BANDERA_CINTA_3
-    if seg == 3:
-        return BANDERA_CINTA_4
-    if seg == 4:
-        return BANDERA_CINTA_5
-    return False
 
 
-def estado_cintas():
-    """Estado actual de las cinco banderas, en orden Cinta 1..5."""
+
+def estado_cintas(cintas):
+    """Devuelve el estado de las cinco cintas, en orden Cinta 1..5."""
     return [
-        BANDERA_CINTA_1,
-        BANDERA_CINTA_2,
-        BANDERA_CINTA_3,
-        BANDERA_CINTA_4,
-        BANDERA_CINTA_5,
+        cinta.esta_activa()
+        for cinta in cintas
     ]
 
 
-def conmutar_cinta(numero):
-    """Conmuta en tiempo de ejecución una bandera de marcha/parada."""
-    global BANDERA_CINTA_1, BANDERA_CINTA_2, BANDERA_CINTA_3
-    global BANDERA_CINTA_4, BANDERA_CINTA_5
 
-    if numero == 1:
-        BANDERA_CINTA_1 = not BANDERA_CINTA_1
-        return BANDERA_CINTA_1
-    if numero == 2:
-        BANDERA_CINTA_2 = not BANDERA_CINTA_2
-        return BANDERA_CINTA_2
-    if numero == 3:
-        BANDERA_CINTA_3 = not BANDERA_CINTA_3
-        return BANDERA_CINTA_3
-    if numero == 4:
-        BANDERA_CINTA_4 = not BANDERA_CINTA_4
-        return BANDERA_CINTA_4
-    if numero == 5:
-        BANDERA_CINTA_5 = not BANDERA_CINTA_5
-        return BANDERA_CINTA_5
-    raise ValueError(f"Número de cinta inválido: {numero}")
-
-
-def transport_force(pos, vel, seg):
+def transport_force(pos, vel, seg,cintas):
     """Fuerza de transporte de las 4 cintas y de la rama al horno."""
     x, y = float(pos[0]), float(pos[1])
     vx, vy = float(vel[0]), float(vel[1])
@@ -718,7 +677,7 @@ def transport_force(pos, vel, seg):
     # Si la bandera de esta cinta está a False, se aplica frenado viscoso
     # sobre el plano XY. La física sigue activa y el resto de cintas/robot
     # continúan funcionando de forma independiente.
-    if not cinta_activa(seg):
+    if not cintas[seg].esta_activa():
         fx = VEL_KP * (0.0 - vx)
         fy = VEL_KP * (0.0 - vy)
         return (
@@ -728,34 +687,34 @@ def transport_force(pos, vel, seg):
 
     if seg == 0:  # inferior: +X -> +Y
         alpha = np.clip((x - TURN_START) / max(CORNER_SWITCH - TURN_START, 1e-6), 0.0, 1.0)
-        desired_vx = BELT_SPEED * (1.0 - 0.45 * alpha)
-        desired_vy = BELT_SPEED * (0.85 * alpha)
+        desired_vx=cintas[seg].velocidad * (1.0-0.45*alpha)
+        desired_vy=cintas[seg].velocidad * (0.85*alpha)
         fx = VEL_KP * (desired_vx - vx)
         fy = VEL_KP * (desired_vy - vy) + (1.0 - alpha) * CENTER_KP * (-LANE - y)
 
     elif seg == 1:  # derecha: +Y -> -X
         alpha = np.clip((y - TURN_START) / max(CORNER_SWITCH - TURN_START, 1e-6), 0.0, 1.0)
-        desired_vx = -BELT_SPEED * (0.85 * alpha)
-        desired_vy = BELT_SPEED * (1.0 - 0.45 * alpha)
+        desired_vx=-cintas[seg].velocidad * (0.85*alpha)
+        desired_vy=cintas[seg].velocidad * (1.0-0.45*alpha)
         fx = VEL_KP * (desired_vx - vx) + (1.0 - alpha) * CENTER_KP * (LANE - x)
         fy = VEL_KP * (desired_vy - vy)
 
     elif seg == 2:  # superior: -X -> -Y
         alpha = np.clip((-x - TURN_START) / max(CORNER_SWITCH - TURN_START, 1e-6), 0.0, 1.0)
-        desired_vx = -BELT_SPEED * (1.0 - 0.45 * alpha)
-        desired_vy = -BELT_SPEED * (0.85 * alpha)
+        desired_vx=-cintas[seg].velocidad*(1.0-0.45*alpha)
+        desired_vy=-cintas[seg].velocidad*(0.85*alpha)
         fx = VEL_KP * (desired_vx - vx)
         fy = VEL_KP * (desired_vy - vy) + (1.0 - alpha) * CENTER_KP * (LANE - y)
 
     elif seg == 3:  # izquierda: -Y -> +X en esquina inferior
         alpha = np.clip((-y - TURN_START) / max(CORNER_SWITCH - TURN_START, 1e-6), 0.0, 1.0)
-        desired_vx = BELT_SPEED * (0.85 * alpha)
-        desired_vy = -BELT_SPEED * (1.0 - 0.45 * alpha)
+        desired_vx = -cintas[seg].velocidad * (0.85 * alpha)
+        desired_vy=-cintas[seg].velocidad*(1.0-0.45*alpha)
         fx = VEL_KP * (desired_vx - vx) + (1.0 - alpha) * CENTER_KP * (-LANE - x)
         fy = VEL_KP * (desired_vy - vy)
 
     elif seg == 4:  # Cinta 5 al horno: -X
-        desired_vx = -BRANCH_SPEED
+        desired_vx=-cintas[seg].velocidad
         desired_vy = 0.0
         fx = VEL_KP * (desired_vx - vx)
         fy = VEL_KP * (desired_vy - vy) + CENTER_KP * (BRANCH_Y - y)
@@ -775,7 +734,7 @@ def send_object_back_to_line(model, data, i, dadr, segments):
     segments[i] = 0
 
 
-def apply_transport(model, data, body_ids, dof_addrs, segments, oven_counts, robot_state):
+def apply_transport(model, data, body_ids, dof_addrs, segments, oven_counts, robot_state,cintas):
     """Aplica transporte; el cubo reservado se inmoviliza hasta que lo toma el Panda."""
     data.xfrc_applied[:] = 0.0
 
@@ -793,7 +752,7 @@ def apply_transport(model, data, body_ids, dof_addrs, segments, oven_counts, rob
             fx, fy = robot.robot_hold_force(pos, vel, ROBOT_CONFIG, MAX_FORCE)
         else:
             segments[i] = update_segment(pos, segments[i], i)
-            fx, fy = transport_force(pos, vel, segments[i])
+            fx, fy = transport_force(pos, vel, segments[i], cintas)
 
         data.xfrc_applied[bid, 0] = fx
         data.xfrc_applied[bid, 1] = fy
@@ -826,7 +785,7 @@ def add_label(image, text, status_text=None):
     return img
 
 
-def render_camera_mosaic(renderer, data, paused, sim_time, oven_total, robot_state):
+def render_camera_mosaic(renderer, data, paused, sim_time, oven_total, robot_state,cintas):
     cams = [
         ("cam_bottom", "CINTA 1 · INFERIOR · +X"),
         ("cam_right",  "CINTA 2 · DERECHA · +Y"),
@@ -837,7 +796,7 @@ def render_camera_mosaic(renderer, data, paused, sim_time, oven_total, robot_sta
     ]
 
     frames = []
-    flags = estado_cintas()
+    flags = estado_cintas(cintas)
     flags_txt = " ".join(f"C{i+1}:{'ON' if v else 'OFF'}" for i, v in enumerate(flags))
     status = (f"t={sim_time:6.1f}s · {'PAUSA' if paused else 'EN MARCHA'} · "
               f"{flags_txt} · Panda={robot_state['state']} · "
@@ -862,9 +821,9 @@ def render_camera_mosaic(renderer, data, paused, sim_time, oven_total, robot_sta
 # -----------------------------------------------------------------------------
 # ACTUADORES DE LOS RODILLOS DE LA PLANTA
 # -----------------------------------------------------------------------------
-def initialize_belt_rollers(model, data):
+def initialize_belt_rollers(model, data,cintas):
     """Actualiza los rodillos según la bandera independiente de cada cinta."""
-    f1, f2, f3, f4, f5 = estado_cintas()
+    f1, f2, f3, f4, f5 = estado_cintas(cintas)
     roller_commands = {
         "belt_act_b1":  5.5 if f1 else 0.0,
         "belt_act_b2":  5.5 if f1 else 0.0,
@@ -887,9 +846,19 @@ def initialize_belt_rollers(model, data):
 # -----------------------------------------------------------------------------
 # BUCLE PRINCIPAL
 # -----------------------------------------------------------------------------
+
 def run():
     model = robot.build_model_with_franka(build_mjcf(), ROBOT_CONFIG)
     data = mujoco.MjData(model)
+
+    cintas =[
+        CintaTransportadora("Cinta 1",0.55,"+X"),
+        CintaTransportadora("Cinta 2",0.55,"+Y"),
+        CintaTransportadora("Cinta 3",0.55,"-X"),
+        CintaTransportadora("Cinta 4",0.55,"-Y"),
+        CintaTransportadora("Cinta 5",0.48,"-X")
+    ]
+    
 
     overview_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overview")
 
@@ -911,7 +880,7 @@ def run():
         )
         mujoco.mj_forward(model, data)
 
-    initialize_belt_rollers(model, data)
+    initialize_belt_rollers(model, data,cintas)
 
     renderer = None
     if SHOW_CAMERA_MOSAIC:
@@ -935,7 +904,7 @@ def run():
     else:
         print("Modo robot: pick-and-place automático")
     print("Banderas iniciales:", " ".join(
-        f"C{i+1}={'ON' if v else 'OFF'}" for i, v in enumerate(estado_cintas())
+        f"C{i+1}={'ON' if v else 'OFF'}" for i, v in enumerate(estado_cintas(cintas))
     ))
     print(f"Camaras: FOV={CAM_FOVY:.0f} deg, altura={CAM_HEIGHT:.2f} m")
     print(f"Bloqueo de rotacion de objetos: {LOCK_OBJECT_ROTATION}")
@@ -961,7 +930,7 @@ def run():
                     # Modo de validación: se ignora temporalmente la máquina de estados
                     # pick-and-place y se manda directamente una pose 6D al TCP.
                     apply_transport(
-                        model, data, body_ids, dof_addrs, segments, oven_counts, robot_state
+                        model, data, body_ids, dof_addrs, segments, oven_counts, robot_state,cintas
                     )
                     robot.control_manual_ik(
                         model, data, robot_ids, robot_state,
@@ -974,7 +943,7 @@ def run():
                         OBJECT_REST_Z, ROBOT_CONFIG
                     )
                     apply_transport(
-                        model, data, body_ids, dof_addrs, segments, oven_counts, robot_state
+                        model, data, body_ids, dof_addrs, segments, oven_counts, robot_state,cintas
                     )
                     robot.control_robot_ik(model, data, robot_ids, robot_state, ROBOT_CONFIG)
                     robot.follow_tcp_with_grasped_object(model, data, robot_ids, robot_state)
@@ -995,7 +964,7 @@ def run():
             if SHOW_CAMERA_MOSAIC and renderer is not None:
                 if last_cam_time < 0.0 or (data.time - last_cam_time) >= (1.0 / CAM_FPS) or paused:
                     mosaic = render_camera_mosaic(
-                        renderer, data, paused, data.time, sum(oven_counts), robot_state
+                        renderer, data, paused, data.time, sum(oven_counts), robot_state,cintas
                     )
                     cv2.imshow("Camaras de la planta", mosaic)
                     last_cam_time = data.time
@@ -1006,11 +975,15 @@ def run():
                 elif key == ord('p'):
                     paused = not paused
                     print("PAUSA GLOBAL" if paused else "SIMULACIÓN REANUDADA")
+                
                 elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
                     numero_cinta = key - ord('0')
-                    activa = conmutar_cinta(numero_cinta)
-                    initialize_belt_rollers(model, data)
+                    cinta=cintas[numero_cinta - 1]
+                    cinta.conmutar()
+                    activa=cinta.esta_activa()
+                    initialize_belt_rollers(model, data,cintas)
                     print(f"Cinta {numero_cinta}: {'ON' if activa else 'OFF'}")
+
                 elif key == ord('r'):
                     reset_objects(model, data, segments)
                     oven_counts[:] = [0, 0, 0, 0, 0]
@@ -1024,7 +997,7 @@ def run():
                             orientation_frame=ROBOT_IK_ORIENTATION_FRAME,
                         )
                         mujoco.mj_forward(model, data)
-                    initialize_belt_rollers(model, data)
+                    initialize_belt_rollers(model, data,cintas)
                     print("Planta y Panda reiniciados")
                 elif key == ord('t') and ROBOT_IK_TEST_MODE:
                     robot.set_ik_target_rpy(
