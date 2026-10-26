@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # Planta MuJoCo con 4 cintas transportadoras
 
 Simulación procedural en Python, **sin programación orientada a objetos**.
@@ -82,6 +82,3 @@ El código no define ninguna `class`. Se organiza mediante funciones:
 - `run()`
 
 Esto permite utilizarlo directamente como ejemplo de programación procedural.
-=======
-# POO_p1_Ander_zuazquita_pastor
->>>>>>> a130973f17433ba47c9d58203bb52852d94c22b3
