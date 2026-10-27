@@ -489,7 +489,7 @@ def ik_target_text(robot_state):
     if rpy is None:
         return f"pos=[{ptxt}] orient=quaternion/world"
     rtxt = ", ".join(f"{v:.1f}" for v in rpy)
-    return f"pos=[{ptxt}] rpy_deg=[{rtxt}] frame={robot_state.get('ik_orientation_frame','world')}"
+    return f"pos=[{ptxt}] rpy_deg=[{rtxt}] frame={robot_state.get('ik_oriesegments[i]ntation_frame','world')}"
 
 
 # -----------------------------------------------------------------------------
@@ -504,13 +504,19 @@ def robot_hold_force(pos, vel, cfg, max_force):
     return float(np.clip(fx, -max_force, max_force)), float(np.clip(fy, -max_force, max_force))
 
 
-def watch_for_cube(data, body_ids, segments, robot_state, cfg):
+def watch_for_cube(data, body_ids, objetos, robot_state, cfg):
     """Reserva una pieza objetivo al entrar en la zona de recogida."""
     if robot_state["state"] != "idle" or robot_state["target_obj"] >= 0:
         return
 
     for i in sorted(cfg["pick_object_ids"]):
-        if segments[i] != 3:
+        print(
+        f"[DEBUG Panda] objeto={i}, "
+        f"segmento={objetos[i].segmento}, "
+        f"x={data.xpos[body_ids[i]][0]:.3f}, "
+        f"y={data.xpos[body_ids[i]][1]:.3f}"
+        )
+        if objetos[i].segmento != 3:
             continue
         pos = data.xpos[body_ids[i]]
         if cfg["pick_y"] - 0.04 <= float(pos[1]) <= cfg["pick_trigger_y"]:
@@ -579,7 +585,7 @@ def follow_tcp_with_grasped_object(model, data, robot_ids, robot_state):
     data.qvel[dadr:dadr+6] = 0.0
 
 
-def release_object_to_branch(model, data, robot_state, segments, object_rest_z, cfg):
+def release_object_to_branch(model, data, robot_state,objetos, object_rest_z, cfg):
     """Deposita la pieza centrada en Cinta 5 y cede el transporte a la banda."""
     i = robot_state["grasped_obj"]
     if i < 0:
@@ -591,7 +597,7 @@ def release_object_to_branch(model, data, robot_state, segments, object_rest_z, 
     data.qpos[qadr:qadr+3] = [cfg["place_x"], cfg["place_y"], object_rest_z[i]]
     data.qpos[qadr+3:qadr+7] = [1.0, 0.0, 0.0, 0.0]
     data.qvel[dadr:dadr+6] = [-cfg["branch_speed"], 0.0, 0.0, 0.0, 0.0, 0.0]
-    segments[i] = 4
+    objetos[i].segmento=4
     robot_state["grasped_obj"] = -1
     print(f"[Panda] obj{i} depositado en Cinta 5 -> horno.")
 
@@ -631,13 +637,13 @@ def control_robot_ik(model, data, robot_ids, robot_state, cfg):
         data.ctrl[robot_ids["gripper_actuator_id"]] = PANDA_OPEN
 
 
-def update_robot_state_machine(model, data, body_ids, robot_ids, robot_state, segments, object_rest_z, cfg):
+def update_robot_state_machine(model, data, body_ids, robot_ids, robot_state, objetos, object_rest_z, cfg):
     """Secuencia procedural: aproximar -> coger -> levantar -> depositar -> retirar."""
     state = robot_state["state"]
     now = float(data.time)
 
     if state == "idle":
-        watch_for_cube(data, body_ids, segments, robot_state, cfg)
+        watch_for_cube(data, body_ids, objetos, robot_state, cfg)
         return
 
     elapsed = now - robot_state["state_t0"]
@@ -652,7 +658,7 @@ def update_robot_state_machine(model, data, body_ids, robot_ids, robot_state, se
             data.qpos[qadr:qadr+3] = [cfg["pick_x"], cfg["pick_y"], object_rest_z[i]]
             data.qpos[qadr+3:qadr+7] = [1.0, 0.0, 0.0, 0.0]
             data.qvel[dadr:dadr+6] = 0.0
-            segments[i] = 3
+            objetos[i].segmento = 3
         print(f"[Panda] Timeout en fase {state}; reinicio seguro del ciclo.")
         robot_state["target_obj"] = -1
         robot_state["grasped_obj"] = -1
@@ -660,7 +666,7 @@ def update_robot_state_machine(model, data, body_ids, robot_ids, robot_state, se
         return
 
     reached = robot_target_reached(data, robot_ids, robot_state, cfg)
-
+    
     if state == "approach_pick" and reached:
         set_robot_state(robot_state, "descend_pick", now)
     elif state == "descend_pick" and reached:
@@ -673,7 +679,7 @@ def update_robot_state_machine(model, data, body_ids, robot_ids, robot_state, se
     elif state == "transfer" and reached:
         set_robot_state(robot_state, "descend_place", now)
     elif state == "descend_place" and reached:
-        release_object_to_branch(model, data, robot_state, segments, object_rest_z, cfg)
+        release_object_to_branch(model, data, robot_state,objetos, object_rest_z, cfg)
         set_robot_state(robot_state, "open", now)
     elif state == "open" and elapsed >= ROBOT_STATE_DWELL:
         set_robot_state(robot_state, "retract", now)

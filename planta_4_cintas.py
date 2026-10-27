@@ -43,7 +43,7 @@ import mujoco.viewer
 
 import robot
 from src.cinta_transportadora import CintaTransportadora
-
+from src.objeto_industrial import ObjetoIndustrial
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN GENERAL
 # -----------------------------------------------------------------------------
@@ -571,7 +571,7 @@ def get_ids(model):
 
 
 
-def reset_objects(model, data, segments):
+def reset_objects(model, data, objetos):
     """Reinicia las 5 piezas. El cubo rojo comienza cerca de la isla."""
     starts = [
         (-LANE, 0.95, OBJECT_REST_Z[0], 3),   # cubo rojo: llega pronto a la estación Panda
@@ -589,7 +589,7 @@ def reset_objects(model, data, segments):
         data.qpos[qadr:qadr+3] = [x, y, z]
         data.qpos[qadr+3:qadr+7] = [1.0, 0.0, 0.0, 0.0]
         data.qvel[dadr:dadr+6] = 0.0
-        segments[i] = seg
+        objetos[i].segmento=seg 
 
     data.xfrc_applied[:] = 0.0
     mujoco.mj_forward(model, data)
@@ -609,7 +609,7 @@ def lock_object_rotations(model, data):
         data.qvel[dadr+3:dadr+6] = 0.0
 
 
-def lock_cylinders_to_belt_center(model, data, segments):
+def lock_cylinders_to_belt_center(model, data, objetos):
     """Mantiene los cilindros en la línea central de los tramos rectos."""
     if not LOCK_CYLINDERS_TO_CENTERLINE:
         return
@@ -620,7 +620,7 @@ def lock_cylinders_to_belt_center(model, data, segments):
         dadr = model.jnt_dofadr[jid]
         x = float(data.qpos[qadr])
         y = float(data.qpos[qadr + 1])
-        seg = segments[i]
+        seg = objetos[i].segmento
 
         if seg == 0 and x < TURN_START:
             data.qpos[qadr + 1] = -LANE
@@ -723,7 +723,7 @@ def transport_force(pos, vel, seg,cintas):
 
 
 
-def send_object_back_to_line(model, data, i, dadr, segments):
+def send_object_back_to_line(model, data, i, dadr, objetos):
     """Al entrar en el horno, reaparece en Cinta 1 para mantener flujo continuo."""
     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"obj{i}_free")
     qadr = model.jnt_qposadr[jid]
@@ -731,10 +731,10 @@ def send_object_back_to_line(model, data, i, dadr, segments):
     data.qpos[qadr:qadr+3] = [x0, -LANE, OBJECT_REST_Z[i]]
     data.qpos[qadr+3:qadr+7] = [1.0, 0.0, 0.0, 0.0]
     data.qvel[dadr:dadr+6] = 0.0
-    segments[i] = 0
+    objetos[i].segmento = 0
 
 
-def apply_transport(model, data, body_ids, dof_addrs, segments, oven_counts, robot_state,cintas):
+def apply_transport(model, data, body_ids, dof_addrs, objetos, oven_counts, robot_state,cintas):
     """Aplica transporte; el cubo reservado se inmoviliza hasta que lo toma el Panda."""
     data.xfrc_applied[:] = 0.0
 
@@ -751,15 +751,16 @@ def apply_transport(model, data, body_ids, dof_addrs, segments, oven_counts, rob
         if i == robot_state["target_obj"] and robot_state["state"] != "idle":
             fx, fy = robot.robot_hold_force(pos, vel, ROBOT_CONFIG, MAX_FORCE)
         else:
-            segments[i] = update_segment(pos, segments[i], i)
-            fx, fy = transport_force(pos, vel, segments[i], cintas)
+            segmento_actual = objetos[i].segmento
+            objetos[i].segmento = update_segment(pos, segmento_actual, i)
+            fx, fy = transport_force(pos, vel, objetos[i].segmento,cintas)
 
         data.xfrc_applied[bid, 0] = fx
         data.xfrc_applied[bid, 1] = fy
 
-        if segments[i] == 4 and pos[0] <= OVEN_ENTRY_X:
+        if objetos[i].segmento == 4 and pos[0] <= OVEN_ENTRY_X:
             oven_counts[i] += 1
-            send_object_back_to_line(model, data, i, dadr, segments)
+            send_object_back_to_line(model, data, i, dadr, objetos)
             continue
 
         if pos[2] < -0.1 or abs(pos[0]) > 5.0 or abs(pos[1]) > 2.4:
@@ -768,7 +769,7 @@ def apply_transport(model, data, body_ids, dof_addrs, segments, oven_counts, rob
             data.qpos[qadr:qadr+3] = [-0.8 + 0.25*i, -LANE, OBJECT_REST_Z[i]]
             data.qpos[qadr+3:qadr+7] = [1.0, 0.0, 0.0, 0.0]
             data.qvel[dadr:dadr+6] = 0.0
-            segments[i] = 0
+            objetos[i].segmento=0
 
 
 # -----------------------------------------------------------------------------
@@ -863,12 +864,25 @@ def run():
     overview_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overview")
 
     body_ids, dof_addrs = get_ids(model)
-    robot_ids = robot.get_robot_ids(model)
-    robot_state = robot.new_robot_state()
-    segments = [3, 1, 2, 3, 0]
     oven_counts = [0, 0, 0, 0, 0]
 
-    reset_objects(model, data, segments)
+    segmentos_iniciales = [3, 1, 2, 3, 0]
+    objetos = []
+
+    for i in range(len(body_ids)):
+        objeto = ObjetoIndustrial(
+            identificador=i,
+            tipo="cubo",
+            segmento=segmentos_iniciales[i],
+            body_id=body_ids[i]
+        )
+        objetos.append(objeto)
+    
+    robot_ids = robot.get_robot_ids(model)
+    robot_state = robot.new_robot_state()
+    
+
+    reset_objects(model, data,objetos)
     robot.initialize_robot(model, data, robot_ids, robot_state)
 
     if ROBOT_IK_TEST_MODE:
@@ -930,7 +944,7 @@ def run():
                     # Modo de validación: se ignora temporalmente la máquina de estados
                     # pick-and-place y se manda directamente una pose 6D al TCP.
                     apply_transport(
-                        model, data, body_ids, dof_addrs, segments, oven_counts, robot_state,cintas
+                        model, data, body_ids, dof_addrs, objetos, oven_counts, robot_state,cintas
                     )
                     robot.control_manual_ik(
                         model, data, robot_ids, robot_state,
@@ -939,11 +953,11 @@ def run():
                 else:
                     # Modo automático original: Cinta 4 -> Panda -> Cinta 5.
                     robot.update_robot_state_machine(
-                        model, data, body_ids, robot_ids, robot_state, segments,
+                        model, data, body_ids, robot_ids, robot_state, objetos,
                         OBJECT_REST_Z, ROBOT_CONFIG
                     )
                     apply_transport(
-                        model, data, body_ids, dof_addrs, segments, oven_counts, robot_state,cintas
+                        model, data, body_ids, dof_addrs, objetos, oven_counts, robot_state,cintas
                     )
                     robot.control_robot_ik(model, data, robot_ids, robot_state, ROBOT_CONFIG)
                     robot.follow_tcp_with_grasped_object(model, data, robot_ids, robot_state)
@@ -953,7 +967,7 @@ def run():
 
                 # Estabilización de piezas.
                 lock_object_rotations(model, data)
-                lock_cylinders_to_belt_center(model, data, segments)
+                lock_cylinders_to_belt_center(model, data, objetos)
                 if not ROBOT_IK_TEST_MODE:
                     robot.follow_tcp_with_grasped_object(model, data, robot_ids, robot_state)
                 mujoco.mj_forward(model, data)
@@ -985,7 +999,7 @@ def run():
                     print(f"Cinta {numero_cinta}: {'ON' if activa else 'OFF'}")
 
                 elif key == ord('r'):
-                    reset_objects(model, data, segments)
+                    reset_objects(model, data,objetos)
                     oven_counts[:] = [0, 0, 0, 0, 0]
                     robot_state.clear()
                     robot_state.update(robot.new_robot_state())
