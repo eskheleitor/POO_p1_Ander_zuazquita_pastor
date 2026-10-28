@@ -44,6 +44,7 @@ import mujoco.viewer
 import robot
 from src.cinta_transportadora import CintaTransportadora
 from src.objeto_industrial import ObjetoIndustrial
+from src.camara_inspeccion import CamaraInspeccion
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN GENERAL
 # -----------------------------------------------------------------------------
@@ -171,7 +172,7 @@ ROBOT_CONFIG = robot.make_config(
 # -----------------------------------------------------------------------------
 # True: desactiva temporalmente el pick-and-place y controla el TCP con una
 # pose objetivo 6D. False: recupera el comportamiento automático de la planta.
-ROBOT_IK_TEST_MODE = True
+ROBOT_IK_TEST_MODE =True
 
 # Posición del TCP en coordenadas WORLD [x, y, z] (metros).
 ROBOT_IK_TARGET_POSITION = np.array([-1.45, 0.05, 0.62], dtype=float)
@@ -775,18 +776,37 @@ def apply_transport(model, data, body_ids, dof_addrs, objetos, oven_counts, robo
 # -----------------------------------------------------------------------------
 # VISUALIZACIÓN DE LAS 4 CÁMARAS
 # -----------------------------------------------------------------------------
-def add_label(image, text, status_text=None):
+
+def add_label(image, text, status_text=None, forma_text=None):
     img = image.copy()
+
     cv2.rectangle(img, (0, 0), (img.shape[1], 36), (20, 20, 20), -1)
     cv2.putText(img, text, (12, 25), cv2.FONT_HERSHEY_SIMPLEX,
                 0.65, (245, 245, 245), 2, cv2.LINE_AA)
-    if status_text:
-        cv2.putText(img, status_text, (12, img.shape[0]-12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (245, 245, 245), 1, cv2.LINE_AA)
+
+    if forma_text:
+        cv2.rectangle(
+            img,
+            (0, img.shape[0] - 36),
+            (img.shape[1], img.shape[0]),
+            (20, 20, 20),
+            -1
+        )
+        cv2.putText(
+            img, forma_text, (12, img.shape[0] - 12),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+            (245, 245, 245), 1, cv2.LINE_AA
+        )
+    elif status_text:
+        cv2.putText(
+            img, status_text, (12, img.shape[0] - 12),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.48,
+            (245, 245, 245), 1, cv2.LINE_AA
+        )
+
     return img
 
-
-def render_camera_mosaic(renderer, data, paused, sim_time, oven_total, robot_state,cintas):
+def render_camera_mosaic(renderer, data, paused, sim_time, oven_total, robot_state,cintas, camaras):
     cams = [
         ("cam_bottom", "CINTA 1 · INFERIOR · +X"),
         ("cam_right",  "CINTA 2 · DERECHA · +Y"),
@@ -803,20 +823,50 @@ def render_camera_mosaic(renderer, data, paused, sim_time, oven_total, robot_sta
               f"{flags_txt} · Panda={robot_state['state']} · "
               f"ciclos={robot_state['cycles']} · horno={oven_total}")
 
-    for cam_name, title in cams:
+    
+    for indice, (cam_name, title) in enumerate(cams):
         renderer.update_scene(data, camera=cam_name)
         rgb = renderer.render()
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        frames.append(add_label(bgr, title, status))
+
+        forma_text = None
+
+        if indice < len(camaras):
+            forma = camaras[indice].forma_detectada
+
+            if forma is None:
+                forma_text = "Forma: sin detectar"
+            else:
+                forma_text = "Forma: " + forma.replace("_", " ").upper()
+
+        frames.append(add_label(bgr, title, status, forma_text))
+
 
     top = np.hstack((frames[0], frames[1], frames[2]))
     bottom = np.hstack((frames[3], frames[4], frames[5]))
+
+# Unimos las dos filas de cámaras.
     mosaic = np.vstack((top, bottom))
 
-    cv2.putText(mosaic, "Q/ESC salir | P pausa | 1-5 cintas ON/OFF | R reset | S captura",
-                (12, mosaic.shape[0]-12), cv2.FONT_HERSHEY_SIMPLEX,
-                0.55, (255, 255, 255), 2, cv2.LINE_AA)
-    return mosaic
+# Creamos una franja negra debajo de las cámaras.
+    alto_texto = 35
+    franja = np.zeros((alto_texto, mosaic.shape[1], 3), dtype=np.uint8)
+
+    cv2.putText(
+        franja,
+        "Q/ESC salir | P pausa | 1-5 cintas ON/OFF | R reset | S captura",
+        (12, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA
+    )
+
+# Añadimos la franja sin tapar las imágenes.
+    mosaic = np.vstack((mosaic, franja))
+
+    return mosaic   
 
 
 # -----------------------------------------------------------------------------
@@ -859,6 +909,13 @@ def run():
         CintaTransportadora("Cinta 4",0.55,"-Y"),
         CintaTransportadora("Cinta 5",0.48,"-X")
     ]
+    camaras = [
+        CamaraInspeccion("Camara 1", "cam_bottom", cintas[0]),
+        CamaraInspeccion("Camara 2", "cam_right", cintas[1]),
+        CamaraInspeccion("Camara 3", "cam_top", cintas[2]),
+        CamaraInspeccion("Camara 4", "cam_left", cintas[3]),
+        CamaraInspeccion("Camara 5", "cam_oven", cintas[4])
+    ]
     
 
     overview_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overview")
@@ -872,7 +929,7 @@ def run():
     for i in range(len(body_ids)):
         objeto = ObjetoIndustrial(
             identificador=i,
-            tipo="cubo",
+            tipo=["cubo", "cilindro", "cubo", "cilindro", "cubo"][i],
             segmento=segmentos_iniciales[i],
             body_id=body_ids[i]
         )
@@ -905,6 +962,10 @@ def run():
     paused = False
     running = True
     last_cam_time = -1.0
+    ultimo_analisis_camaras = -1.0
+    INTERVALO_ANALISIS_CAMARAS = 0.25
+    indice_camara = 0
+    
 
     print("\n=== PLANTA ROBOTIZADA: 4 CINTAS + PANDA + HORNO ===")
     print("Circuito: inferior -> derecha -> superior -> izquierda -> inferior")
@@ -938,7 +999,7 @@ def run():
                 break
 
             step_start = time.perf_counter()
-
+            
             if not paused:
                 if ROBOT_IK_TEST_MODE:
                     # Modo de validación: se ignora temporalmente la máquina de estados
@@ -974,14 +1035,29 @@ def run():
 
             if viewer_ctx is not None:
                 viewer_ctx.sync()
+            
+            if SHOW_CAMERA_MOSAIC and renderer is not None: 
+                if (
+                    ultimo_analisis_camaras < 0.0
+                    or data.time - ultimo_analisis_camaras >= INTERVALO_ANALISIS_CAMARAS
+                ):
+                    for camara in camaras:
+                        imagen = camara.capturar(renderer, data)
+                        camara.forma_detectada = camara.detectar_forma(imagen)
+                        camara.objeto_detectado = camara.forma_detectada is not None
 
+                    ultimo_analisis_camaras = data.time
+
+            
             if SHOW_CAMERA_MOSAIC and renderer is not None:
                 if last_cam_time < 0.0 or (data.time - last_cam_time) >= (1.0 / CAM_FPS) or paused:
                     mosaic = render_camera_mosaic(
-                        renderer, data, paused, data.time, sum(oven_counts), robot_state,cintas
-                    )
+                        renderer, data, paused, data.time, sum(oven_counts),
+                        robot_state, cintas, camaras
+                     )
                     cv2.imshow("Camaras de la planta", mosaic)
                     last_cam_time = data.time
+
 
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord('q'), 27):
@@ -1030,7 +1106,23 @@ def run():
                         filename = OUTPUT_DIR / f"mosaico_{int(time.time())}.png"
                         cv2.imwrite(str(filename), mosaic)
                         print(f"Captura guardada: {filename}")
+                
+                
+                elif key == ord('d'):
+                    camara = camaras[indice_camara]
+                    imagen = camara.actualizar(renderer, data)
 
+                    cv2.imshow(camara.nombre, imagen)
+
+                    print(
+                        camara.nombre,
+                        "Forma:", camara.forma_detectada,
+                        "| Cinta activa:", camara.cinta.esta_activa()
+                    )
+
+                    indice_camara = (indice_camara + 1) % len(camaras)
+
+ 
             elapsed = time.perf_counter() - step_start
             sleep_time = model.opt.timestep - elapsed
             if sleep_time > 0:

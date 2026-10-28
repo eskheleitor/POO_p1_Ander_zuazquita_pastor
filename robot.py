@@ -440,6 +440,7 @@ def control_pose_ik(model, data, robot_ids, robot_state, target_pos, target_R,
     dq = np.clip(dq, -float(max_qvel), float(max_qvel))
 
     q_cmd = q + dq * float(model.opt.timestep)
+    
     for k, jid in enumerate(robot_ids["joint_ids"]):
         if model.jnt_limited[jid]:
             lo, hi = model.jnt_range[jid]
@@ -510,12 +511,7 @@ def watch_for_cube(data, body_ids, objetos, robot_state, cfg):
         return
 
     for i in sorted(cfg["pick_object_ids"]):
-        print(
-        f"[DEBUG Panda] objeto={i}, "
-        f"segmento={objetos[i].segmento}, "
-        f"x={data.xpos[body_ids[i]][0]:.3f}, "
-        f"y={data.xpos[body_ids[i]][1]:.3f}"
-        )
+       
         if objetos[i].segmento != 3:
             continue
         pos = data.xpos[body_ids[i]]
@@ -622,6 +618,8 @@ def control_robot_ik(model, data, robot_ids, robot_state, cfg):
         return
 
     target = state_target_position(state, cfg)
+    
+    
     if target is None:
         return
 
